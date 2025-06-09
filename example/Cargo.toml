@@ -1,0 +1,21 @@
+[package]
+name = "processor_example"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "main"
+path = "main.rs"
+
+[dependencies]
+# Local processor library
+rust_processor = { path = "../processor" }
+
+# Additional dependencies for examples
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# MLX dependencies only for non-WASM targets
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+mlx-rs = { workspace = true }
+mlx-sys = { workspace = true } 
