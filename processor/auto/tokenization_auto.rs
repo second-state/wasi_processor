@@ -25,17 +25,17 @@ struct TextConfig {
 }
 
 /// Extract model type from config.json file
-/// 
+///
 /// # Arguments
 /// * `model_dir` - Path to the model directory containing config.json
-/// 
+///
 /// # Returns
 /// * `Option<String>` - Model type if found, None otherwise
 fn get_model_type_from_config(model_dir: &str) -> Option<String> {
     let config_path = format!("{}/config.json", model_dir);
     let config_str = fs::read_to_string(&config_path).ok()?;
     let config: Config = serde_json::from_str(&config_str).ok()?;
-    
+
     if let Some(mt) = config.model_type {
         Some(mt)
     } else if let Some(tc) = config.text_config {
@@ -47,21 +47,24 @@ fn get_model_type_from_config(model_dir: &str) -> Option<String> {
 
 impl AutoTokenizer {
     /// Load tokenizer from pretrained model directory
-    /// 
+    ///
     /// # Arguments
     /// * `model_dir` - Path to the model directory
-    /// 
+    ///
     /// # Returns
     /// * `Result<AutoTokenizerType, String>` - Loaded tokenizer or error message
     pub fn from_pretrained(model_dir: &str) -> Result<AutoTokenizerType, String> {
         let model_type = get_model_type_from_config(model_dir)
             .ok_or_else(|| format!("Unable to get model_type from {}/config.json", model_dir))?;
-            
+
         match model_type.as_str() {
-            "gemma3" | "gemma3_text" => {
-                Ok(AutoTokenizerType::Gemma3(Gemma3Tokenizer::from_pretrained(model_dir)))
-            },
-            _ => Err(format!("AutoTokenizer for model_type '{}' is not implemented", model_type)),
+            "gemma3" | "gemma3_text" => Ok(AutoTokenizerType::Gemma3(
+                Gemma3Tokenizer::from_pretrained(model_dir),
+            )),
+            _ => Err(format!(
+                "AutoTokenizer for model_type '{}' is not implemented",
+                model_type
+            )),
         }
     }
-} 
+}
