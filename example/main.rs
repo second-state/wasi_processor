@@ -5,7 +5,7 @@ mod mlx_wrapper;
 use mlx_rs::Array;
 use rust_processor::auto::processing_auto::AutoProcessor;
 use rust_processor::gemma3::detokenizer::{decode, Detokenizer};
-use rust_processor::{prepare_inputs, NDTensorF32};
+use rust_processor::{prepare_inputs, tensor::*};
 use std::env;
 
 // Use local MLX functions
@@ -181,7 +181,7 @@ fn run_token_decoding_test(processor: &rust_processor::gemma3::processor::Gemma3
 
 #[cfg(not(target_family = "wasm"))]
 /// Helper function to print model inputs in a formatted way
-fn print_model_inputs(title: &str, model_inputs: &std::collections::HashMap<String, NDTensorF32>) {
+fn print_model_inputs(title: &str, model_inputs: &std::collections::HashMap<String, AnyNDTensor>) {
     println!("{}:", title);
     println!("{{");
     for (key, tensor) in model_inputs {
@@ -193,9 +193,10 @@ fn print_model_inputs(title: &str, model_inputs: &std::collections::HashMap<Stri
             .join(", ");
 
         println!(
-            "  '{}': array(shape=[{}], values={:?}...),",
+            "  '{}': array(shape=[{}], rtype={:?}, values={:?}...),",
             key,
             shape_str,
+            tensor.rtype(),
             tensor.first_n(5)
         );
     }

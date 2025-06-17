@@ -2,7 +2,7 @@
 use mlx_rs::Array;
 #[cfg(not(target_family = "wasm"))]
 use mlx_sys::mlx_save;
-use rust_processor::NDTensorF32;
+use rust_processor::tensor::*;
 use std::collections::HashMap;
 #[cfg(not(target_family = "wasm"))]
 use std::ffi::CString;
@@ -15,7 +15,7 @@ use std::ffi::CString;
 /// # Returns
 /// * `Result<(), Box<dyn std::error::Error>>` - Success or error
 pub fn save_tensors_as_npy(
-    tensors: &HashMap<String, NDTensorF32>,
+    tensors: &HashMap<String, AnyNDTensor>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_family = "wasm")]
     {
@@ -38,24 +38,40 @@ pub fn save_tensors_as_npy(
 /// # Arguments
 /// * `name` - Name of the tensor (used as filename)
 /// * `tensor` - The NDTensor to save
-fn save_tensor_as_npy(name: &str, tensor: &NDTensorF32) -> Result<(), Box<dyn std::error::Error>> {
+fn save_tensor_as_npy(name: &str, tensor: &AnyNDTensor) -> Result<(), Box<dyn std::error::Error>> {
     // Create MLX Array with appropriate shape
-    let shape: Vec<i32> = tensor.shape.iter().map(|&x| x as i32).collect();
+    let shape: Vec<i32> = tensor.shape().iter().map(|&x| x as i32).collect();
 
-    if name.contains("pixel_values") {
-        // pixel_values keep f32 type
-        let mlx_array = Array::from_slice(&tensor.data, shape.as_slice());
-        save_mlx_array(name, &mlx_array)?;
-    } else if name.contains("input_ids")
-        || name.contains("mask")
-        || name.contains("attention_mask")
-        || name.contains("token_type_ids")
-        || name.contains("num_crops")
-    {
-        // Other types convert to i32
-        let data: Vec<i32> = tensor.data.iter().map(|&x| x as i32).collect();
-        let mlx_array = Array::from_slice(&data, shape.as_slice());
-        save_mlx_array(name, &mlx_array)?;
+    // Create MLX Array using the original data type
+    match tensor {
+        AnyNDTensor::F16(t) => {
+            // Convert F16 to u16 for MLX compatibility
+            let data: Vec<u16> = t.data.iter().map(|x| x.0).collect();
+            let mlx_array = Array::from_slice(&data, shape.as_slice());
+            save_mlx_array(name, &mlx_array)?;
+        }
+        AnyNDTensor::F32(t) => {
+            let mlx_array = Array::from_slice(&t.data, shape.as_slice());
+            save_mlx_array(name, &mlx_array)?;
+        }
+        AnyNDTensor::F64(t) => {
+            // MLX doesn't support f64, convert to f32
+            let data: Vec<f32> = t.data.iter().map(|&x| x as f32).collect();
+            let mlx_array = Array::from_slice(&data, shape.as_slice());
+            save_mlx_array(name, &mlx_array)?;
+        }
+        AnyNDTensor::I8(t) => {
+            let mlx_array = Array::from_slice(&t.data, shape.as_slice());
+            save_mlx_array(name, &mlx_array)?;
+        }
+        AnyNDTensor::I32(t) => {
+            let mlx_array = Array::from_slice(&t.data, shape.as_slice());
+            save_mlx_array(name, &mlx_array)?;
+        }
+        AnyNDTensor::I64(t) => {
+            let mlx_array = Array::from_slice(&t.data, shape.as_slice());
+            save_mlx_array(name, &mlx_array)?;
+        }
     }
 
     Ok(())
@@ -86,11 +102,11 @@ fn save_mlx_array(name: &str, array: &Array) -> Result<(), Box<dyn std::error::E
 /// * `prefix` - Prefix to add to all tensor names
 ///
 /// # Returns
-/// * `HashMap<String, NDTensor>` - New HashMap with prefixed names
+/// * `HashMap<String, AnyNDTensor>` - New HashMap with prefixed names
 pub fn add_prefix_to_tensor_names(
-    tensors: HashMap<String, NDTensorF32>,
+    tensors: HashMap<String, AnyNDTensor>,
     prefix: &str,
-) -> HashMap<String, NDTensorF32> {
+) -> HashMap<String, AnyNDTensor> {
     tensors
         .into_iter()
         .map(|(k, v)| (format!("{}_{}", prefix, k), v))

@@ -1,5 +1,5 @@
 use crate::gemma3::processor::Gemma3Processor;
-use crate::tensor::NDTensorF32;
+use crate::tensor::*;
 use std::collections::HashMap;
 use std::fs;
 
@@ -17,81 +17,34 @@ pub fn prepare_inputs(
     prompt: &str,
     _image_token_index: u32,
     resize_shape: Option<(u32, u32)>,
-) -> HashMap<String, NDTensorF32> {
-    // Read multiple images
-    let mut images_bytes = Vec::new();
-
-    // If no images provided, return text-only results
-    if image_paths.is_empty() {
-        return process_text_only(processor, prompt);
-    }
-
-    // Read all images
-    for image_path in image_paths {
-        let image_bytes =
-            fs::read(image_path).expect(&format!("Cannot read image: {}", image_path));
-        images_bytes.push(image_bytes);
-    }
-
-    // Set resize shape if provided
-    if let Some(shape) = resize_shape {
-        processor.image_processor.size = shape;
-    }
-
-    // Process images and text
-    process_images_and_text(processor, &images_bytes, prompt, resize_shape)
-}
-
-/// Process text-only input (no images)
-fn process_text_only(
-    processor: &mut Gemma3Processor,
-    prompt: &str,
-) -> HashMap<String, NDTensorF32> {
-    let batch_feature = processor.process(Some(prompt), None);
+) -> HashMap<String, AnyNDTensor> {
     let mut model_inputs = HashMap::new();
 
-    // Add input_ids (2D tensor [1, seq_len])
-    if !batch_feature.input_ids.is_empty() {
-        let input_ids = &batch_feature.input_ids[0];
-        let shape = vec![1u32, input_ids.len() as u32];
-        let data: Vec<f32> = input_ids.iter().map(|&id| id as f32).collect();
-        model_inputs.insert("input_ids".to_string(), NDTensorF32::new(data, shape));
-    }
+    // Check if we have images to process
+    let has_images = !image_paths.is_empty();
+    let mut input_ids = Vec::new();
+    let mut attention_mask = Vec::new();
+    let mut token_type_ids = Vec::new();
 
-    // Add attention_mask (2D tensor [1, seq_len])
-    if !batch_feature.attention_mask.is_empty() {
-        let attention_mask = &batch_feature.attention_mask[0];
-        let shape = vec![1u32, attention_mask.len() as u32];
-        let data: Vec<f32> = attention_mask.iter().map(|&mask| mask as f32).collect();
-        model_inputs.insert("mask".to_string(), NDTensorF32::new(data, shape));
-    }
+    if has_images {
+        // Set resize shape if provided
+        if let Some(shape) = resize_shape {
+            processor.image_processor.size = shape;
+        }
 
-    // Add token_type_ids (2D tensor [1, seq_len])
-    if !batch_feature.token_type_ids.is_empty() {
-        let token_type_ids = &batch_feature.token_type_ids[0];
-        let shape = vec![1u32, token_type_ids.len() as u32];
-        let data: Vec<f32> = token_type_ids.iter().map(|&id| id as f32).collect();
-        model_inputs.insert("token_type_ids".to_string(), NDTensorF32::new(data, shape));
-    }
+        // Read all images
+        let mut images_bytes = Vec::new();
+        for image_path in image_paths {
+            let image_bytes =
+                fs::read(image_path).expect(&format!("Cannot read image: {}", image_path));
+            images_bytes.push(image_bytes);
+        }
 
-    model_inputs
-}
+        // Process images and collect pixel values
+        let mut all_pixel_values = Vec::new();
+        let mut all_num_crops = Vec::new();
 
-/// Process both images and text
-fn process_images_and_text(
-    processor: &mut Gemma3Processor,
-    images_bytes: &[Vec<u8>],
-    prompt: &str,
-    resize_shape: Option<(u32, u32)>,
-) -> HashMap<String, NDTensorF32> {
-    let mut all_pixel_values = Vec::new();
-    let mut all_num_crops = Vec::new();
-    let mut final_input_ids = Vec::new();
-    let mut final_attention_mask = Vec::new();
-    let mut final_token_type_ids = Vec::new();
-
-    // Process the first image with text
-    if !images_bytes.is_empty() {
+        // Process the first image with text
         let batch_feature = processor.process(Some(prompt), Some(&images_bytes[0]));
 
         // Collect results from the first image
@@ -103,13 +56,13 @@ fn process_images_and_text(
         }
 
         if !batch_feature.input_ids.is_empty() {
-            final_input_ids = batch_feature.input_ids[0].clone();
+            input_ids = batch_feature.input_ids[0].clone();
         }
         if !batch_feature.attention_mask.is_empty() {
-            final_attention_mask = batch_feature.attention_mask[0].clone();
+            attention_mask = batch_feature.attention_mask[0].clone();
         }
         if !batch_feature.token_type_ids.is_empty() {
-            final_token_type_ids = batch_feature.token_type_ids[0].clone();
+            token_type_ids = batch_feature.token_type_ids[0].clone();
         }
 
         // Process remaining images (image-only, no text)
@@ -123,55 +76,74 @@ fn process_images_and_text(
                 all_num_crops.extend(num_crops);
             }
         }
+
+        // Add pixel_values to model inputs
+        if !all_pixel_values.is_empty() {
+            // Use provided resize_shape or default size
+            let (height, width) = resize_shape.unwrap_or((896, 896));
+            let channels = 3u32;
+            let num_images = images_bytes.len() as u32;
+
+            // Multi-image shape: [num_images, channels, height, width]
+            let shape = vec![num_images, channels, height, width];
+            model_inputs.insert(
+                "pixel_values".to_string(),
+                AnyNDTensor::F32(NDTensorF32::new(all_pixel_values, shape)),
+            );
+        }
+
+        // Add num_crops information
+        if !all_num_crops.is_empty() {
+            let shape = vec![all_num_crops.len() as u32];
+            let data: Vec<f32> = all_num_crops.iter().map(|&crop| crop as f32).collect();
+            model_inputs.insert(
+                "num_crops".to_string(),
+                AnyNDTensor::F32(NDTensorF32::new(data, shape)),
+            );
+        }
+    } else {
+        // Process text-only (no images)
+        let batch_feature = processor.process(Some(prompt), None);
+
+        if !batch_feature.input_ids.is_empty() {
+            input_ids = batch_feature.input_ids[0].clone();
+        }
+        if !batch_feature.attention_mask.is_empty() {
+            attention_mask = batch_feature.attention_mask[0].clone();
+        }
+        if !batch_feature.token_type_ids.is_empty() {
+            token_type_ids = batch_feature.token_type_ids[0].clone();
+        }
     }
 
-    // Build model inputs (similar to test.py's model_inputs, but supporting multi-dimensional arrays)
-    let mut model_inputs = HashMap::new();
-
-    // Add pixel_values (adjust dimensions based on number of images)
-    if !all_pixel_values.is_empty() {
-        // Use provided resize_shape or default size
-        let (height, width) = resize_shape.unwrap_or((896, 896));
-        let channels = 3u32;
-        let num_images = images_bytes.len() as u32;
-
-        // Multi-image shape: [num_images, channels, height, width]
-        let shape = vec![num_images, channels, height, width];
+    // Add text-related tensors (unified processing)
+    if !input_ids.is_empty() {
+        let shape = vec![1u32, input_ids.len() as u32];
+        let data: Vec<i64> = input_ids.iter().map(|&id| id as i64).collect();
         model_inputs.insert(
-            "pixel_values".to_string(),
-            NDTensorF32::new(all_pixel_values, shape),
+            "input_ids".to_string(),
+            AnyNDTensor::I64(NDTensorI64::new(data, shape)),
         );
     }
 
-    // Add input_ids (2D tensor [1, seq_len])
-    if !final_input_ids.is_empty() {
-        let shape = vec![1u32, final_input_ids.len() as u32];
-        let data: Vec<f32> = final_input_ids.iter().map(|&id| id as f32).collect();
-        model_inputs.insert("input_ids".to_string(), NDTensorF32::new(data, shape));
-    }
-
     // Add attention_mask (2D tensor [1, seq_len])
-    if !final_attention_mask.is_empty() {
-        let shape = vec![1u32, final_attention_mask.len() as u32];
-        let data: Vec<f32> = final_attention_mask
-            .iter()
-            .map(|&mask| mask as f32)
-            .collect();
-        model_inputs.insert("mask".to_string(), NDTensorF32::new(data, shape));
+    if !attention_mask.is_empty() {
+        let shape = vec![1u32, attention_mask.len() as u32];
+        let data: Vec<i64> = attention_mask.iter().map(|&mask| mask as i64).collect();
+        model_inputs.insert(
+            "mask".to_string(),
+            AnyNDTensor::I64(NDTensorI64::new(data, shape)),
+        );
     }
 
     // Add token_type_ids (2D tensor [1, seq_len])
-    if !final_token_type_ids.is_empty() {
-        let shape = vec![1u32, final_token_type_ids.len() as u32];
-        let data: Vec<f32> = final_token_type_ids.iter().map(|&id| id as f32).collect();
-        model_inputs.insert("token_type_ids".to_string(), NDTensorF32::new(data, shape));
-    }
-
-    // Add num_crops information
-    if !all_num_crops.is_empty() {
-        let shape = vec![all_num_crops.len() as u32];
-        let data: Vec<f32> = all_num_crops.iter().map(|&crop| crop as f32).collect();
-        model_inputs.insert("num_crops".to_string(), NDTensorF32::new(data, shape));
+    if !token_type_ids.is_empty() {
+        let shape = vec![1u32, token_type_ids.len() as u32];
+        let data: Vec<i64> = token_type_ids.iter().map(|&id| id as i64).collect();
+        model_inputs.insert(
+            "token_type_ids".to_string(),
+            AnyNDTensor::I64(NDTensorI64::new(data, shape)),
+        );
     }
 
     model_inputs
